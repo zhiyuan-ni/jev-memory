@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import type { Experimental_EvaluationModel } from 'ai';
 import type {
   AggregatedUsage,
   CompactResult,
@@ -22,18 +21,18 @@ import {
 } from './gates.js';
 import { selectWithinBudget, type BudgetCandidate } from './budget.js';
 
-/** The default Jev model id, resolved through the Vercel AI Gateway. */
-export const DEFAULT_MODEL: Experimental_EvaluationModel = 'typesafe-ai/jev';
+/** The default Jev model id exposed by AIHubMix's native System One API. */
+export const DEFAULT_MODEL = 'jev-1.13';
 
 const ZERO_USAGE: AggregatedUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, calls: 0 };
 
 export interface CreateMemoryOptions {
   /** Where memories are persisted. See `inMemoryStore` / `jsonFileStore`. */
   store: MemoryStore;
-  /** Jev model id or instance. Defaults to `'typesafe-ai/jev'`. */
-  model?: Experimental_EvaluationModel;
+  /** AIHubMix Jev model id. Defaults to `'jev-1.13'`. */
+  model?: string;
   /**
-   * Ceiling on questions per `evaluate()` call before jev-memory splits into
+   * Ceiling on questions per System One call before jev-memory splits into
    * multiple round trips. See the doc comment on `evaluateInChunks` for why
    * this exists. Default 50.
    */
@@ -48,8 +47,10 @@ export interface CreateMemoryOptions {
   idGenerator?: () => string;
   /** Clock, overridable for tests. Default `Date.now`. */
   now?: () => number;
-  /** Forwarded to every `evaluate()` call. Default 2 (the AI SDK's own default). */
+  /** Retry count after the initial System One request. Default 2. */
   maxRetries?: number;
+  /** Per-request AIHubMix timeout in milliseconds. Default 10,000. */
+  requestTimeoutMs?: number;
 }
 
 export interface RememberOptions {
@@ -108,6 +109,7 @@ export function createMemory(options: CreateMemoryOptions): JevMemory {
     idGenerator = randomUUID,
     now = Date.now,
     maxRetries,
+    requestTimeoutMs,
   } = options;
 
   async function remember(text: string, opts: RememberOptions = {}): Promise<RememberResult> {
@@ -145,6 +147,7 @@ export function createMemory(options: CreateMemoryOptions): JevMemory {
       maxQuestionsPerCall: defaultMaxQuestionsPerCall,
       abortSignal: opts.abortSignal,
       maxRetries,
+      requestTimeoutMs,
     });
 
     const durabilityAnswer = answers.durability;
@@ -198,6 +201,7 @@ export function createMemory(options: CreateMemoryOptions): JevMemory {
         maxQuestionsPerCall: opts.maxQuestionsPerCall ?? defaultMaxQuestionsPerCall,
         abortSignal: opts.abortSignal,
         maxRetries,
+        requestTimeoutMs,
       });
       usage = result.usage;
 
@@ -245,6 +249,7 @@ export function createMemory(options: CreateMemoryOptions): JevMemory {
       maxQuestionsPerCall: opts.maxQuestionsPerCall ?? defaultMaxQuestionsPerCall,
       abortSignal: opts.abortSignal,
       maxRetries,
+      requestTimeoutMs,
     });
 
     const evictionScores: Record<string, number> = {};

@@ -15,7 +15,7 @@ export const RELEVANCE_LEVELS: readonly string[] = [
 ];
 
 /**
- * Write gate: a single boolean question asking whether `text` is durable
+ * Write gate: a single boolean (AIHubMix `noul`) question asking whether `text` is durable
  * enough to keep in long-term memory. `state` is passed separately as the
  * shared `evaluate()` state (typically the conversation/turn context); the
  * candidate fact itself travels inside this one question's instructions.

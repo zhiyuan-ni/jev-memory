@@ -73,12 +73,12 @@ export interface MemoryStore {
   update(id: string, patch: Partial<Omit<Memory, 'id'>>): Promise<void> | void;
 }
 
-/** Usage accounting, aggregated across every `evaluate()` call a gate made (zero calls -> all zero). */
+/** Usage accounting, aggregated across every System One call a gate made (zero calls -> all zero). */
 export interface AggregatedUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  /** Number of `evaluate()` round trips actually made (0 when a gate short-circuited, e.g. no unpinned candidates). */
+  /** Number of System One round trips actually made (0 when a gate short-circuited, e.g. no unpinned candidates). */
   calls: number;
 }
 
@@ -91,7 +91,7 @@ export interface RememberResult {
   durability: number;
   /** Deterministic, non-generated explanation of the decision (never model-authored text). */
   reason: string;
-  /** Usage for the (at most one) `evaluate()` call this made. */
+  /** Usage for the (at most one) System One call this made. */
   usage: AggregatedUsage;
   ms: number;
 }

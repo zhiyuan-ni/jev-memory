@@ -1,19 +1,10 @@
-/**
- * jev-memory deliberately does not implement AI Gateway auth itself -- the
- * `ai` package already knows how to authenticate a Jev call two ways (see
- * README "Auth"). This module only checks, before spending a round trip,
- * that one of those two paths is configured, and fails with a clear message
- * if not.
- */
-export function assertAuthConfigured(): void {
-  if (process.env.AI_GATEWAY_API_KEY) return;
-  if (process.env.VERCEL_OIDC_TOKEN) return;
+/** Ensures the native AIHubMix System One endpoint has a server-side key. */
+export function assertAuthConfigured(): string {
+  const apiKey = process.env.AIHUBMIX_API_KEY;
+  if (apiKey) return apiKey;
 
   throw new Error(
-    'jev-memory: no AI Gateway credentials found. The Vercel AI SDK needs one of:\n' +
-      '  1. AI_GATEWAY_API_KEY set in the environment (create one at https://vercel.com/dashboard -> AI Gateway), or\n' +
-      '  2. VERCEL_OIDC_TOKEN set (populated by running `vercel env pull` inside a Vercel-linked project; ' +
-      'this token is short-lived, about 12h, and needs to be refreshed the same way).\n' +
-      'jev-memory does not manage credentials itself -- it only verifies the AI SDK has what it needs before calling evaluate().',
+    'jev-memory: no AIHubMix credentials found. Set AIHUBMIX_API_KEY to an API key from ' +
+      'https://aihubmix.com before calling Jev.',
   );
 }

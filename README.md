@@ -1,7 +1,7 @@
 # jev-memory
 
 An agent long-term-memory layer for the [Vercel AI SDK](https://ai-sdk.dev), backed by the
-`typesafe-ai/jev` evaluation model via the Vercel AI Gateway.
+Jev evaluation model via AIHubMix's native System One API.
 
 It manages the full memory lifecycle through three gates. Every one of them is a **selection**
 decision, never a generation -- so nothing is ever summarized, paraphrased or rewritten, and
@@ -42,25 +42,31 @@ output as the candidate fact. jev-memory will still refuse to alter it.
 npm install jev-memory ai
 ```
 
-`ai@^7.0.105` is a peer dependency -- `experimental_evaluate` (Jev's entry point) lives there.
-jev-memory has no other runtime dependencies.
+`ai@^7.0.105` remains a peer dependency for the optional AI SDK integration helpers.
+Jev decisions themselves use the built-in `fetch` API and have no additional runtime dependency.
 
-## Auth (two paths, handled entirely by the AI SDK)
+## Auth (AIHubMix)
 
-jev-memory does **not** implement authentication. `experimental_evaluate` resolves the Jev model
-through the AI SDK, which supports two credential sources:
+Set a server-side AIHubMix key before using a gate:
 
-1. **`AI_GATEWAY_API_KEY`** -- a long-lived key from the
-   [Vercel AI Gateway dashboard](https://vercel.com/dashboard). Simplest for CI, scripts, and
-   non-Vercel deployments.
-2. **Vercel OIDC** -- if `AI_GATEWAY_API_KEY` isn't set, the SDK falls back to
-   `getVercelOidcToken()`, which reads `VERCEL_OIDC_TOKEN`. Inside a Vercel-linked project, run
-   `vercel env pull` to populate it. The token is short-lived (about 12h) and needs the same
-   command to refresh.
+```sh
+export AIHUBMIX_API_KEY="sk-..."
+```
 
-Before spending a round trip, jev-memory checks that one of these is set and throws a clear error
-if neither is -- so a missing credential fails fast with a useful message instead of a confusing
-provider error three layers down.
+jev-memory sends requests to `https://aihubmix.com/v1/systemone` with Bearer authentication.
+It fails before a network call when `AIHUBMIX_API_KEY` is missing. Never expose this key to a
+browser or commit it to source control.
+
+### Live verification with a local proxy
+
+Put `AIHUBMIX_API_KEY` in `.env`, then run `npm run test:live` with Node >=24.5.
+This command loads `.env` before launching Vitest, enables native Node proxy support
+for its workers, and uses the enabled macOS HTTPS proxy if `HTTPS_PROXY`/`https_proxy`
+is not already set. On other platforms, set `HTTPS_PROXY` to your local HTTP proxy.
+The tests send synthetic coding preferences and exercise write, retrieve and eviction.
+
+For your own Node application, supply `HTTPS_PROXY` and `NODE_USE_ENV_PROXY=1` before
+starting Node; opening a proxy app alone does not configure Node's `fetch`.
 
 ## API
 
@@ -73,12 +79,13 @@ const memory = createMemory({
   store: jsonFileStore('./memories.json'),
 
   // All optional:
-  model: 'typesafe-ai/jev',      // default
+  model: 'jev-1.13',             // default; `jev-latest` is also supported
   maxQuestionsPerCall: 50,       // see "Why chunk at all?" below
   writeThreshold: 0.6,           // P(durable) required to store a fact
   evictThreshold: 0.6,           // P(should evict) required to drop a fact
   tokenEstimator: myTokenizer,   // default: ~4 chars/token heuristic
-  maxRetries: 2,                 // forwarded to every evaluate() call
+  maxRetries: 2,                 // retries after the initial System One request
+  requestTimeoutMs: 10_000,      // per-request timeout
 });
 ```
 
@@ -106,7 +113,7 @@ never model-generated text.
 
 ### `memory.select(options)`
 
-Runs the retrieve gate over **every** stored, non-pinned memory in a single `evaluate()` call (or
+Runs the retrieve gate over **every** stored, non-pinned memory in a single System One call (or
 the minimum number of chunks -- see below), and returns the highest-scoring subset that fits
 `tokenBudget`.
 
@@ -122,7 +129,7 @@ const { memories, scores, tokens, usage, ms, droppedForBudget } = await memory.s
   left out.
 - `droppedForBudget` -- memories that scored above zero but didn't fit the budget, with their
   score and estimated token cost, so you can see what you're leaving on the table.
-- `usage` / `ms` -- aggregated across every `evaluate()` call this made (zero calls if the store
+- `usage` / `ms` -- aggregated across every System One call this made (zero calls if the store
   is empty or every memory is pinned).
 
 Selection is **greedy by score-per-token density**, not top-K by raw score. Top-K can spend an
@@ -162,7 +169,7 @@ memory.store;             // the underlying MemoryStore, for direct access
 
 Jev answers every question in its `questions` map against one shared `state` in a single
 provider call. jev-memory's entire retrieval and eviction architecture exists to exploit that:
-scoring N stored memories for relevance is **one** `evaluate()` call with N questions, never N
+scoring N stored memories for relevance is **one** System One call with N questions, never N
 separate calls.
 
 ### Why chunk at all above `maxQuestionsPerCall`?
@@ -170,7 +177,7 @@ separate calls.
 Jev can, in principle, answer an arbitrary number of questions in one call. jev-memory still caps
 a single call at `maxQuestionsPerCall` (default 50) because:
 
-1. **Blast radius.** `evaluate()` retries the *whole* call on a transient failure
+1. **Blast radius.** a System One retry repeats the *whole* call on a transient failure
    (`maxRetries`, default 2). A smaller batch means a retry redoes less work, and a genuinely bad
    response only invalidates one chunk's worth of memories instead of your entire memory store.
 2. **Bounded latency.** A single call's latency should stay roughly constant regardless of how
@@ -278,8 +285,7 @@ formatting or want to log/telemetry the raw `SelectResult`.
 
 - TypeScript, ESM, strict mode. Built with `tsup` to ESM + `.d.ts`.
 - `ai` is a peer dependency; jev-memory has no other runtime dependencies.
-- Unit tests (`vitest`) mock `experimental_evaluate` at the module boundary -- there is no network
-  access to the AI Gateway in CI/dev for this package, so no test makes a live call.
+- Unit tests (`vitest`) mock `fetch` at the HTTP boundary -- no test makes a live AIHubMix call.
 
 ```sh
 npm install

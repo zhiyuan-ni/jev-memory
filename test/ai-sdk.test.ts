@@ -1,10 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { inMemoryStore } from '../src/store/memory-store.js';
 import { formatMemoriesForPrompt } from '../src/ai-sdk.js';
 import type { Memory } from '../src/types.js';
-
-const experimental_evaluate = vi.fn();
-vi.mock('ai', () => ({ experimental_evaluate }));
 
 const { createMemory } = await import('../src/memory.js');
 const { selectSystemPrompt } = await import('../src/ai-sdk.js');
@@ -12,10 +9,6 @@ const { selectSystemPrompt } = await import('../src/ai-sdk.js');
 function makeMemory(id: string, text: string): Memory {
   return { id, text, createdAt: 0, updatedAt: 0, pinned: true };
 }
-
-beforeEach(() => {
-  experimental_evaluate.mockReset();
-});
 
 describe('formatMemoriesForPrompt', () => {
   it('renders each memory verbatim as a bullet, under a default heading', () => {
@@ -43,7 +36,6 @@ describe('selectSystemPrompt', () => {
 
     const { prompt, result } = await selectSystemPrompt(memory, { state: 'current turn' });
 
-    expect(experimental_evaluate).not.toHaveBeenCalled(); // pinned-only store
     expect(prompt).toContain('Always use TypeScript strict mode');
     expect(result.memories).toHaveLength(1);
   });

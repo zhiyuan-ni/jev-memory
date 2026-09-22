@@ -1,121 +1,105 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-const experimental_evaluate = vi.fn();
-vi.mock('ai', () => ({ experimental_evaluate }));
-
-// Imported after the mock so the module under test picks up the mocked `ai`.
-const { evaluateInChunks } = await import('../src/evaluate-client.js');
-
-function mockAnswersFor(ids: string[]) {
-  return {
-    answers: Object.fromEntries(ids.map((id, i) => [id, { type: 'boolean', probability: i / Math.max(1, ids.length - 1) }])),
-    usage: { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
-    warnings: [],
-    rounding: undefined,
-    providerMetadata: undefined,
-    response: { timestamp: new Date(), modelId: 'typesafe-ai/jev' },
-  };
-}
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { evaluateInChunks } from '../src/evaluate-client.js';
 
 function question(): { type: 'boolean'; instructions: string } {
   return { type: 'boolean', instructions: 'is this durable?' };
 }
 
+function response(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
 beforeEach(() => {
-  experimental_evaluate.mockReset();
+  process.env.AIHUBMIX_API_KEY = 'test-aihubmix-key';
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('evaluateInChunks', () => {
-  it('makes zero evaluate() calls (and never checks auth) for an empty question set', async () => {
-    delete process.env.AI_GATEWAY_API_KEY;
-    delete process.env.VERCEL_OIDC_TOKEN;
-    try {
-      const { answers, usage } = await evaluateInChunks({}, 'state', {
-        model: 'typesafe-ai/jev',
-        maxQuestionsPerCall: 50,
-      });
-      expect(experimental_evaluate).not.toHaveBeenCalled();
-      expect(answers).toEqual({});
-      expect(usage).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0, calls: 0 });
-    } finally {
-      process.env.AI_GATEWAY_API_KEY = 'test-gateway-key';
-    }
-  });
-
-  it('throws a clear error when neither auth env var is set and there is work to do', async () => {
-    delete process.env.AI_GATEWAY_API_KEY;
-    delete process.env.VERCEL_OIDC_TOKEN;
-    try {
-      await expect(
-        evaluateInChunks({ q1: question() }, 'state', { model: 'typesafe-ai/jev', maxQuestionsPerCall: 50 }),
-      ).rejects.toThrow(/AI_GATEWAY_API_KEY|VERCEL_OIDC_TOKEN/);
-      expect(experimental_evaluate).not.toHaveBeenCalled();
-    } finally {
-      process.env.AI_GATEWAY_API_KEY = 'test-gateway-key';
-    }
-  });
-
-  it('resolves via VERCEL_OIDC_TOKEN when AI_GATEWAY_API_KEY is absent', async () => {
-    delete process.env.AI_GATEWAY_API_KEY;
-    process.env.VERCEL_OIDC_TOKEN = 'fake-oidc-token';
-    experimental_evaluate.mockResolvedValueOnce(mockAnswersFor(['q1']));
-    try {
-      await expect(
-        evaluateInChunks({ q1: question() }, 'state', { model: 'typesafe-ai/jev', maxQuestionsPerCall: 50 }),
-      ).resolves.toBeDefined();
-      expect(experimental_evaluate).toHaveBeenCalledTimes(1);
-    } finally {
-      delete process.env.VERCEL_OIDC_TOKEN;
-      process.env.AI_GATEWAY_API_KEY = 'test-gateway-key';
-    }
-  });
-
-  it('sends N questions in exactly ONE evaluate() call when N <= maxQuestionsPerCall', async () => {
-    const ids = Array.from({ length: 12 }, (_, i) => `mem-${i}`);
-    const questions = Object.fromEntries(ids.map((id) => [id, question()]));
-    experimental_evaluate.mockResolvedValueOnce(mockAnswersFor(ids));
-
-    const { answers, usage } = await evaluateInChunks(questions, 'shared state', {
-      model: 'typesafe-ai/jev',
-      maxQuestionsPerCall: 50,
+  it('makes no HTTP call and does not require auth for an empty question set', async () => {
+    delete process.env.AIHUBMIX_API_KEY;
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(evaluateInChunks({}, 'state', { model: 'jev-1.13', maxQuestionsPerCall: 50 })).resolves.toEqual({
+      answers: {}, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, calls: 0 },
     });
-
-    expect(experimental_evaluate).toHaveBeenCalledTimes(1);
-    const callArgs = experimental_evaluate.mock.calls[0]![0];
-    expect(Object.keys(callArgs.questions)).toHaveLength(12);
-    expect(callArgs.state).toBe('shared state');
-    expect(Object.keys(answers)).toHaveLength(12);
-    expect(usage).toEqual({ inputTokens: 10, outputTokens: 1, totalTokens: 11, calls: 1 });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('chunks into multiple calls above maxQuestionsPerCall, and merges answers + usage', async () => {
-    const ids = Array.from({ length: 5 }, (_, i) => `mem-${i}`);
-    const questions = Object.fromEntries(ids.map((id) => [id, question()]));
-
-    experimental_evaluate.mockImplementation(async ({ questions: chunkQuestions }: { questions: Record<string, unknown> }) => {
-      return mockAnswersFor(Object.keys(chunkQuestions));
-    });
-
-    const { answers, usage } = await evaluateInChunks(questions, 'state', {
-      model: 'typesafe-ai/jev',
-      maxQuestionsPerCall: 2,
-    });
-
-    // 5 questions at 2 per call -> 3 calls (2, 2, 1).
-    expect(experimental_evaluate).toHaveBeenCalledTimes(3);
-    const sizes = experimental_evaluate.mock.calls.map(
-      (call: unknown[]) => Object.keys((call[0] as { questions: Record<string, unknown> }).questions).length,
-    );
-    expect(sizes.sort()).toEqual([1, 2, 2]);
-
-    expect(Object.keys(answers).sort()).toEqual(ids.slice().sort());
-    // Usage is summed across all 3 calls (10 input tokens each).
-    expect(usage).toEqual({ inputTokens: 30, outputTokens: 3, totalTokens: 33, calls: 3 });
+  it('fails clearly when AIHUBMIX_API_KEY is absent', async () => {
+    delete process.env.AIHUBMIX_API_KEY;
+    await expect(evaluateInChunks({ q1: question() }, 'state', { model: 'jev-1.13', maxQuestionsPerCall: 50 }))
+      .rejects.toThrow(/AIHUBMIX_API_KEY/);
   });
 
-  it('never splits below 1 question per call and rejects a non-positive limit', async () => {
-    await expect(
-      evaluateInChunks({ q1: question() }, 'state', { model: 'typesafe-ai/jev', maxQuestionsPerCall: 0 }),
-    ).rejects.toThrow(/maxQuestionsPerCall/);
+  it('uses the System One wire format and maps noul responses to boolean answers', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response({
+      answers: {
+        durable: { type: 'noul', noul: 0.87 },
+        relevance: { type: 'score', score: 3, probabilities: { 0: 0, 3: 1 } },
+      },
+      usage: { input_tokens: 10, output_tokens: 2 },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await evaluateInChunks({
+      durable: { ...question(), criteria: { true: 'Reusable preference', false: 'Temporary chatter' } },
+      relevance: { type: 'score', instructions: { task: 'score it' }, criteria: ['low', 'high'] },
+    }, { turn: 'hello' }, { model: 'jev-1.13', maxQuestionsPerCall: 50 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://aihubmix.com/v1/systemone');
+    expect(init.headers.Authorization).toBe('Bearer test-aihubmix-key');
+    expect(JSON.parse(init.body)).toEqual({
+      model: 'jev-1.13',
+      state: { turn: 'hello' },
+      questions: {
+        durable: {
+          type: 'noul',
+          instructions: 'is this durable?\nReturn the probability that the TRUE criterion applies.\nTRUE: Reusable preference\nFALSE: Temporary chatter',
+        },
+        relevance: { type: 'score', instructions: '{"task":"score it"}', criteria: ['low', 'high'] },
+      },
+    });
+    expect(result).toEqual({
+      answers: {
+        durable: { type: 'boolean', probability: 0.87 },
+        relevance: { type: 'score', score: 3, probabilities: { 0: 0, 3: 1 } },
+      },
+      usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12, calls: 1 },
+    });
+  });
+
+  it('chunks requests and aggregates AIHubMix underscore-case usage fields', async () => {
+    const fetchMock = vi.fn((_: string, init: RequestInit) => {
+      const body = JSON.parse(init.body as string) as { questions: Record<string, unknown> };
+      return Promise.resolve(response({
+        answers: Object.fromEntries(Object.keys(body.questions).map((id) => [id, { type: 'noul', noul: 1 }])),
+        usage: { input_tokens: 4, output_tokens: 1, total_tokens: 5 },
+      }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const questions = Object.fromEntries(['q1', 'q2', 'q3'].map((id) => [id, question()]));
+    const result = await evaluateInChunks(questions, 'state', { model: 'jev-1.13', maxQuestionsPerCall: 2 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.usage).toEqual({ inputTokens: 8, outputTokens: 2, totalTokens: 10, calls: 2 });
+    expect(result.answers).toEqual({
+      q1: { type: 'boolean', probability: 1 },
+      q2: { type: 'boolean', probability: 1 },
+      q3: { type: 'boolean', probability: 1 },
+    });
+  });
+
+  it('aborts a stalled System One request at the configured timeout', async () => {
+    vi.stubGlobal('fetch', vi.fn((_: string, init: RequestInit) => new Promise((_, reject) => {
+      (init.signal as AbortSignal).addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    })));
+    await expect(evaluateInChunks(
+      { q1: question() },
+      'state',
+      { model: 'jev-1.13', maxQuestionsPerCall: 50, maxRetries: 0, requestTimeoutMs: 10 },
+    )).rejects.toThrow(/timed out after 10ms/);
   });
 });
